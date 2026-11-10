@@ -28,7 +28,12 @@ $exeName = "VPN-Manager.exe"
 $iconParam = @()
 $icoFile = Join-Path $PSScriptRoot "app.ico"
 if (Test-Path $icoFile) { $iconParam = @("/win32icon:$icoFile") }
-& $csc /target:winexe "/out:$exeName" @iconParam /codepage:65001 /nologo $refArgs $sources
+
+$manifestParam = @()
+$manifestFile = Join-Path $PSScriptRoot "app.manifest"
+if (Test-Path $manifestFile) { $manifestParam = @("/win32manifest:$manifestFile") }
+
+& $csc /target:winexe "/out:$exeName" @iconParam @manifestParam /codepage:65001 /nologo $refArgs $sources
 if ($LASTEXITCODE -ne 0) {
     Write-Host "Error en compilación: código $LASTEXITCODE" -ForegroundColor Red
     exit 1
