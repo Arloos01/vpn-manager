@@ -1,4 +1,5 @@
 using System;
+using System.Diagnostics;
 using System.IO;
 using System.Net;
 using System.Windows;
@@ -13,6 +14,28 @@ namespace VPNTool
             try
             {
                 PortablePaths.Initialize();
+
+                // Si por alguna razón el proceso arrancó sin privilegios de administrador,
+                // solicitar elevación nativa inmediata para garantizar permisos completos.
+                if (!AdminExec.IsCurrentProcessElevated())
+                {
+                    try
+                    {
+                        string exePath = Process.GetCurrentProcess().MainModule.FileName;
+                        ProcessStartInfo psi = new ProcessStartInfo
+                        {
+                            FileName = exePath,
+                            UseShellExecute = true,
+                            Verb = "runas"
+                        };
+                        Process.Start(psi);
+                        return;
+                    }
+                    catch
+                    {
+                        // Si el usuario cancela la elevación, permitir continuar
+                    }
+                }
 
                 AppDomain.CurrentDomain.UnhandledException += (s, e) =>
                 {
