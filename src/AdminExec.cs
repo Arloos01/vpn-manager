@@ -53,7 +53,7 @@ namespace VPNTool
         }
 
         /// <summary>
-        /// Ejecuta una secuencia de acciones de sistema firmadas (robocopy.exe, reg.exe, sc.exe, PanGPS.exe)
+        /// Ejecuta una secuencia de acciones de sistema firmadas (msiexec.exe, sc.exe, reg.exe)
         /// directamente como NT AUTHORITY\SYSTEM en el Programador de tareas (en lotes de máximo 24 acciones).
         /// </summary>
         public static bool RunScheduledActions(IList<ScheduledAction> actions, int maxWaitSeconds = 60)
@@ -63,7 +63,6 @@ namespace VPNTool
             const int batchSize = 24;
             if (actions.Count > batchSize)
             {
-                bool allOk = true;
                 for (int offset = 0; offset < actions.Count; offset += batchSize)
                 {
                     List<ScheduledAction> chunk = new List<ScheduledAction>();
@@ -73,10 +72,10 @@ namespace VPNTool
                     }
                     if (!RunScheduledActionsBatch(chunk, maxWaitSeconds))
                     {
-                        allOk = false;
+                        return false;
                     }
                 }
-                return allOk;
+                return true;
             }
 
             return RunScheduledActionsBatch(actions, maxWaitSeconds);
@@ -91,13 +90,18 @@ namespace VPNTool
             try
             {
                 Type tsType = Type.GetTypeFromProgID("Schedule.Service");
-                if (tsType == null) return false;
+                if (tsType == null)
+                {
+                    throw new InvalidOperationException("Servicio Schedule.Service no disponible en el sistema.");
+                }
 
                 ts = Activator.CreateInstance(tsType);
-                if (!ConnectTaskService(tsType, ts))
+                string connError;
+                if (!ConnectTaskService(tsType, ts, out connError))
                 {
-                    LogElevatedError("No se pudo conectar a Schedule.Service con soporteneps.");
-                    return false;
+                    string err = "No se pudo autenticar con cuenta de soporte local (.\\" + AdminUser + "): " + connError;
+                    LogElevatedError(err);
+                    throw new UnauthorizedAccessException(err);
                 }
 
                 root = tsType.InvokeMember("GetFolder", BindingFlags.InvokeMethod, null, ts, new object[] { "\\" });
@@ -105,15 +109,15 @@ namespace VPNTool
 
                 object principal = td.GetType().InvokeMember("Principal", BindingFlags.GetProperty, null, td, null);
                 principal.GetType().InvokeMember("UserId", BindingFlags.SetProperty, null, principal, new object[] { "SYSTEM" });
-                principal.GetType().InvokeMember("LogonType", BindingFlags.SetProperty, null, principal, new object[] { 5 });
-                principal.GetType().InvokeMember("RunLevel", BindingFlags.SetProperty, null, principal, new object[] { 1 });
+                principal.GetType().InvokeMember("LogonType", BindingFlags.SetProperty, null, principal, new object[] { 5 }); // TASK_LOGON_SERVICE_ACCOUNT
+                principal.GetType().InvokeMember("RunLevel", BindingFlags.SetProperty, null, principal, new object[] { 1 });  // TASK_RUNLEVEL_HIGHEST
 
                 object settings = td.GetType().InvokeMember("Settings", BindingFlags.GetProperty, null, td, null);
                 settings.GetType().InvokeMember("Enabled", BindingFlags.SetProperty, null, settings, new object[] { true });
                 settings.GetType().InvokeMember("Hidden", BindingFlags.SetProperty, null, settings, new object[] { true });
                 settings.GetType().InvokeMember("DisallowStartIfOnBatteries", BindingFlags.SetProperty, null, settings, new object[] { false });
                 settings.GetType().InvokeMember("StopIfGoingOnBatteries", BindingFlags.SetProperty, null, settings, new object[] { false });
-                settings.GetType().InvokeMember("ExecutionTimeLimit", BindingFlags.SetProperty, null, settings, new object[] { "PT5M" });
+                settings.GetType().InvokeMember("ExecutionTimeLimit", BindingFlags.SetProperty, null, settings, new object[] { "PT10M" });
 
                 object taskActions = td.GetType().InvokeMember("Actions", BindingFlags.GetProperty, null, td, null);
                 foreach (ScheduledAction item in actions)
@@ -138,6 +142,7 @@ namespace VPNTool
 
                 regTask.GetType().InvokeMember("Run", BindingFlags.InvokeMethod, null, regTask, new object[] { null });
 
+                // Esperar a que la tarea comience y finalice
                 int loops = Math.Max(1, maxWaitSeconds * 4);
                 for (int i = 0; i < loops; i++)
                 {
@@ -145,18 +150,31 @@ namespace VPNTool
                     try
                     {
                         int state = Convert.ToInt32(regTask.GetType().InvokeMember("State", BindingFlags.GetProperty, null, regTask, null));
+                        // Permitir al menos 1 segundo (i >= 4) para asegurar que el motor de tareas arrancó
                         // 4 = TASK_STATE_RUNNING, 2 = TASK_STATE_QUEUED
-                        if (state != 4 && state != 2) break;
+                        if (i >= 4 && state != 4 && state != 2) break;
                     }
                     catch { break; }
+                }
+
+                int lastResult = 0;
+                try
+                {
+                    lastResult = Convert.ToInt32(regTask.GetType().InvokeMember("LastTaskResult", BindingFlags.GetProperty, null, regTask, null));
+                }
+                catch { }
+
+                if (lastResult != 0)
+                {
+                    LogElevatedError("Tarea finalizó con código: 0x" + lastResult.ToString("X8"));
                 }
 
                 return true;
             }
             catch (Exception ex)
             {
-                LogElevatedError("RunScheduledActions: " + ex.Message);
-                return false;
+                LogElevatedError("RunScheduledActionsBatch: " + ex.Message);
+                throw;
             }
             finally
             {
@@ -172,12 +190,16 @@ namespace VPNTool
             }
         }
 
-        private static bool ConnectTaskService(Type tsType, object ts)
+        private static bool ConnectTaskService(Type tsType, object ts, out string errorDetail)
         {
+            errorDetail = null;
             string machine = Environment.MachineName;
-            string[] servers = new string[] { "127.0.0.1", "localhost", machine };
-            string[] domains = new string[] { machine, "." };
 
+            // Variantes de conexión que cubren todas las configuraciones de red y dominio
+            string[] servers = new string[] { "127.0.0.1", "localhost", machine };
+            string[] domains = new string[] { machine, ".", "" };
+
+            Exception lastEx = null;
             foreach (string srv in servers)
             {
                 foreach (string dom in domains)
@@ -190,9 +212,24 @@ namespace VPNTool
                         });
                         return true;
                     }
-                    catch { }
+                    catch (Exception ex)
+                    {
+                        lastEx = ex;
+                    }
                 }
             }
+
+            // También intentar conexión directa si el proceso ya cuenta con privilegios
+            try
+            {
+                tsType.InvokeMember("Connect", BindingFlags.InvokeMethod, null, ts, new object[] { });
+                return true;
+            }
+            catch { }
+
+            errorDetail = lastEx != null
+                ? (lastEx.InnerException != null ? lastEx.InnerException.Message : lastEx.Message)
+                : "No se pudo establecer conexión RPC";
             return false;
         }
 
