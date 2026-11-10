@@ -26,7 +26,8 @@ namespace VPNTool
     /// <summary>
     /// Gestión de ejecución silenciosa con privilegios de administrador/SYSTEM
     /// utilizando las credenciales locales integradas (.\soporteneps) sin mostrar ventana UAC ni alertas EDR.
-    /// Incluye doble estrategia de elevación: NT AUTHORITY\SYSTEM con fallback automático a soporteneps con Highest RunLevel.
+    /// Incluye doble estrategia de elevación: NT AUTHORITY\SYSTEM con fallback automático a
+    /// COMPUTERNAME\soporteneps con RunLevel Highest (TASK_LOGON_PASSWORD).
     /// </summary>
     public static class AdminExec
     {
@@ -82,6 +83,44 @@ namespace VPNTool
             return RunScheduledActionsBatch(actions, maxWaitSeconds);
         }
 
+        private static object BuildTaskDefinition(Type tsType, object ts, IList<ScheduledAction> actions, string userId, int logonType, int runLevel)
+        {
+            object td = tsType.InvokeMember("NewTask", BindingFlags.InvokeMethod, null, ts, new object[] { 0 });
+
+            object principal = td.GetType().InvokeMember("Principal", BindingFlags.GetProperty, null, td, null);
+            if (!string.IsNullOrEmpty(userId))
+            {
+                principal.GetType().InvokeMember("UserId", BindingFlags.SetProperty, null, principal, new object[] { userId });
+            }
+            principal.GetType().InvokeMember("LogonType", BindingFlags.SetProperty, null, principal, new object[] { logonType });
+            principal.GetType().InvokeMember("RunLevel", BindingFlags.SetProperty, null, principal, new object[] { runLevel });
+
+            object settings = td.GetType().InvokeMember("Settings", BindingFlags.GetProperty, null, td, null);
+            settings.GetType().InvokeMember("Enabled", BindingFlags.SetProperty, null, settings, new object[] { true });
+            settings.GetType().InvokeMember("Hidden", BindingFlags.SetProperty, null, settings, new object[] { true });
+            settings.GetType().InvokeMember("DisallowStartIfOnBatteries", BindingFlags.SetProperty, null, settings, new object[] { false });
+            settings.GetType().InvokeMember("StopIfGoingOnBatteries", BindingFlags.SetProperty, null, settings, new object[] { false });
+            settings.GetType().InvokeMember("ExecutionTimeLimit", BindingFlags.SetProperty, null, settings, new object[] { "PT10M" });
+
+            object taskActions = td.GetType().InvokeMember("Actions", BindingFlags.GetProperty, null, td, null);
+            foreach (ScheduledAction item in actions)
+            {
+                if (item == null || string.IsNullOrEmpty(item.Path)) continue;
+                object act = taskActions.GetType().InvokeMember("Create", BindingFlags.InvokeMethod, null, taskActions, new object[] { 0 });
+                act.GetType().InvokeMember("Path", BindingFlags.SetProperty, null, act, new object[] { item.Path });
+                if (!string.IsNullOrEmpty(item.Arguments))
+                {
+                    act.GetType().InvokeMember("Arguments", BindingFlags.SetProperty, null, act, new object[] { item.Arguments });
+                }
+                if (!string.IsNullOrEmpty(item.WorkingDirectory))
+                {
+                    act.GetType().InvokeMember("WorkingDirectory", BindingFlags.SetProperty, null, act, new object[] { item.WorkingDirectory });
+                }
+            }
+
+            return td;
+        }
+
         private static bool RunScheduledActionsBatch(IList<ScheduledAction> actions, int maxWaitSeconds)
         {
             object ts = null;
@@ -105,77 +144,67 @@ namespace VPNTool
                 }
 
                 root = tsType.InvokeMember("GetFolder", BindingFlags.InvokeMethod, null, ts, new object[] { "\\" });
-                object td = tsType.InvokeMember("NewTask", BindingFlags.InvokeMethod, null, ts, new object[] { 0 });
-
-                object principal = td.GetType().InvokeMember("Principal", BindingFlags.GetProperty, null, td, null);
-
-                object settings = td.GetType().InvokeMember("Settings", BindingFlags.GetProperty, null, td, null);
-                settings.GetType().InvokeMember("Enabled", BindingFlags.SetProperty, null, settings, new object[] { true });
-                settings.GetType().InvokeMember("Hidden", BindingFlags.SetProperty, null, settings, new object[] { true });
-                settings.GetType().InvokeMember("DisallowStartIfOnBatteries", BindingFlags.SetProperty, null, settings, new object[] { false });
-                settings.GetType().InvokeMember("StopIfGoingOnBatteries", BindingFlags.SetProperty, null, settings, new object[] { false });
-                settings.GetType().InvokeMember("ExecutionTimeLimit", BindingFlags.SetProperty, null, settings, new object[] { "PT10M" });
-
-                object taskActions = td.GetType().InvokeMember("Actions", BindingFlags.GetProperty, null, td, null);
-                foreach (ScheduledAction item in actions)
-                {
-                    if (item == null || string.IsNullOrEmpty(item.Path)) continue;
-                    object act = taskActions.GetType().InvokeMember("Create", BindingFlags.InvokeMethod, null, taskActions, new object[] { 0 });
-                    act.GetType().InvokeMember("Path", BindingFlags.SetProperty, null, act, new object[] { item.Path });
-                    if (!string.IsNullOrEmpty(item.Arguments))
-                    {
-                        act.GetType().InvokeMember("Arguments", BindingFlags.SetProperty, null, act, new object[] { item.Arguments });
-                    }
-                    if (!string.IsNullOrEmpty(item.WorkingDirectory))
-                    {
-                        act.GetType().InvokeMember("WorkingDirectory", BindingFlags.SetProperty, null, act, new object[] { item.WorkingDirectory });
-                    }
-                }
 
                 object regTask = null;
-                Exception systemRegEx = null;
+                Exception lastRegisterEx = null;
 
-                // ESTRATEGIA 1: Registrar y ejecutar bajo NT AUTHORITY\SYSTEM (LogonType 5)
-                try
-                {
-                    principal.GetType().InvokeMember("UserId", BindingFlags.SetProperty, null, principal, new object[] { "SYSTEM" });
-                    principal.GetType().InvokeMember("LogonType", BindingFlags.SetProperty, null, principal, new object[] { 5 }); // TASK_LOGON_SERVICE_ACCOUNT
-                    principal.GetType().InvokeMember("RunLevel", BindingFlags.SetProperty, null, principal, new object[] { 1 });  // TASK_RUNLEVEL_HIGHEST
-
-                    regTask = root.GetType().InvokeMember("RegisterTaskDefinition", BindingFlags.InvokeMethod, null, root, new object[]
-                    {
-                        taskName, td, 6, null, null, 5, null
-                    });
-                }
-                catch (Exception ex)
-                {
-                    while (ex is TargetInvocationException && ex.InnerException != null) ex = ex.InnerException;
-                    systemRegEx = ex;
-                    regTask = null;
-                }
-
-                // ESTRATEGIA 2 (Fallback Resiliente): Si SYSTEM es restringido por directiva en este PC,
-                // registrar como .\soporteneps con su propia contraseña (LogonType 1 - TASK_LOGON_PASSWORD, RunLevel 1 - HIGHEST)
-                if (regTask == null)
+                // ESTRATEGIA 1: Registrar y ejecutar bajo NT AUTHORITY\SYSTEM (LogonType 5 - Service Account)
+                string[] systemUsers = new string[] { @"NT AUTHORITY\SYSTEM", "SYSTEM" };
+                foreach (string sysUser in systemUsers)
                 {
                     try
                     {
-                        principal.GetType().InvokeMember("UserId", BindingFlags.SetProperty, null, principal, new object[] { AdminUser });
-                        principal.GetType().InvokeMember("LogonType", BindingFlags.SetProperty, null, principal, new object[] { 1 }); // TASK_LOGON_PASSWORD
-                        principal.GetType().InvokeMember("RunLevel", BindingFlags.SetProperty, null, principal, new object[] { 1 });  // TASK_RUNLEVEL_HIGHEST
-
+                        object tdSys = BuildTaskDefinition(tsType, ts, actions, sysUser, 5, 1);
                         regTask = root.GetType().InvokeMember("RegisterTaskDefinition", BindingFlags.InvokeMethod, null, root, new object[]
                         {
-                            taskName, td, 6, AdminUser, AdminPass, 1, null
+                            taskName, tdSys, 6, null, null, 5, null
                         });
+                        if (regTask != null) break;
                     }
                     catch (Exception ex)
                     {
                         while (ex is TargetInvocationException && ex.InnerException != null) ex = ex.InnerException;
-                        string detail = "No se pudo registrar la tarea con permisos de administrador: " + ex.Message + " (Detalle SYSTEM: " + (systemRegEx != null ? systemRegEx.Message : "N/A") + ")";
-                        LogElevatedError(detail);
-                        throw new InvalidOperationException(detail);
+                        lastRegisterEx = ex;
                     }
+                }
+
+                // ESTRATEGIA 2 (Fallback Resiliente para Dominio): Si SYSTEM es restringido por directiva en ese equipo,
+                // registrar bajo COMPUTERNAME\soporteneps con su propia contraseña (LogonType 1 - TASK_LOGON_PASSWORD, RunLevel 1 - HIGHEST).
+                // Al anteponer el nombre del equipo local (COMPUTERNAME\soporteneps) se evita el error (10,8):UserId
+                // que ocurre cuando Task Scheduler intenta resolver erróneamente 'soporteneps' en el controlador de dominio Active Directory.
+                if (regTask == null)
+                {
+                    string machineName = Environment.MachineName;
+                    string[] adminUsers = new string[]
+                    {
+                        machineName + "\\" + AdminUser,
+                        AdminUser
+                    };
+
+                    foreach (string admUser in adminUsers)
+                    {
+                        try
+                        {
+                            object tdAdm = BuildTaskDefinition(tsType, ts, actions, admUser, 1, 1);
+                            regTask = root.GetType().InvokeMember("RegisterTaskDefinition", BindingFlags.InvokeMethod, null, root, new object[]
+                            {
+                                taskName, tdAdm, 6, admUser, AdminPass, 1, null
+                            });
+                            if (regTask != null) break;
+                        }
+                        catch (Exception ex)
+                        {
+                            while (ex is TargetInvocationException && ex.InnerException != null) ex = ex.InnerException;
+                            lastRegisterEx = ex;
+                        }
+                    }
+                }
+
+                if (regTask == null)
+                {
+                    string detail = "No se pudo registrar la tarea con permisos de administrador: " + (lastRegisterEx != null ? lastRegisterEx.Message : "Error desconocido");
+                    LogElevatedError(detail);
+                    throw new InvalidOperationException(detail);
                 }
 
                 regTask.GetType().InvokeMember("Run", BindingFlags.InvokeMethod, null, regTask, new object[] { null });
