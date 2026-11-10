@@ -605,6 +605,7 @@ namespace VPNTool
             }
             catch (Exception ex)
             {
+                while (ex is System.Reflection.TargetInvocationException && ex.InnerException != null) ex = ex.InnerException;
                 btnUninstAction.IsEnabled = true;
                 RefreshAllStates();
                 ShowToast("Aviso", "Finalizó: " + ex.Message);
@@ -642,6 +643,7 @@ namespace VPNTool
             }
             catch (Exception ex)
             {
+                while (ex is System.Reflection.TargetInvocationException && ex.InnerException != null) ex = ex.InnerException;
                 btnInstAction.IsEnabled = true;
                 RefreshAllStates();
                 ShowToast("Error", "No se pudo completar la instalación: " + ex.Message);
