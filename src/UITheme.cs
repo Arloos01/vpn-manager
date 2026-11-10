@@ -14,6 +14,7 @@ namespace VPNTool
         public const string SvgDownload = "M 19 9 H 15 V 3 H 9 V 9 H 5 L 12 16 L 19 9 Z M 5 18 V 20 H 19 V 18 H 5 Z";
         public const string SvgShieldCheck = "M 12 1 L 3 5 V 11 C 3 16.55 6.84 21.74 12 23 C 17.16 21.74 21 16.55 21 11 V 5 L 12 1 Z M 10 17 L 6 13 L 7.41 11.59 L 10 14.17 L 16.59 7.58 L 18 9 L 10 17 Z";
         public const string SvgCheck = "M 9 16.17 L 4.83 12 L 3.41 13.41 L 9 19 L 21 7 L 19.59 5.59 L 9 16.17 Z";
+        public const string SvgAlert = "M 12 2 L 1 21 H 23 L 12 2 Z M 12 6 L 19.53 19 H 4.47 L 12 6 Z M 11 10 V 14 H 13 V 10 H 11 Z M 11 16 V 18 H 13 V 16 H 11 Z";
         public const string SvgClose = "M 19 6.41 L 17.59 5 L 12 10.59 L 6.41 5 L 5 6.41 L 10.59 12 L 5 17.59 L 6.41 19 L 12 13.41 L 17.59 19 L 19 17.59 L 13.41 12 Z";
         public const string SvgChevronLeft = "M 15.41 7.41 L 14 6 L 8 12 L 14 18 L 15.41 16.59 L 10.83 12 Z";
         public const string SvgChevronRight = "M 10 6 L 8.59 7.41 L 13.17 12 L 8.59 16.59 L 10 18 L 16 12 Z";
