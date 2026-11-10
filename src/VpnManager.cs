@@ -389,7 +389,14 @@ namespace VPNTool
 
                 if (onProgress != null) onProgress(100, "Instalación finalizada");
 
-                bool installed = IsInstalled();
+                bool installed = false;
+                for (int check = 0; check < 10; check++)
+                {
+                    installed = IsInstalled();
+                    if (installed) break;
+                    Thread.Sleep(500);
+                }
+
                 if (!installed)
                 {
                     string errorDetail = null;
