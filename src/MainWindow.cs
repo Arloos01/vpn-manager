@@ -109,11 +109,10 @@ namespace VPNTool
             };
             titleLeft.Children.Add(txtAppTitle);
 
-            bool isElevated = AdminExec.IsCurrentProcessElevated();
             Border pillTag = new Border
             {
-                Background = isElevated ? new SolidColorBrush(Color.FromArgb(40, 34, 197, 94)) : new SolidColorBrush(Color.FromArgb(40, 56, 189, 248)),
-                BorderBrush = isElevated ? new SolidColorBrush(Color.FromArgb(80, 34, 197, 94)) : new SolidColorBrush(Color.FromArgb(80, 56, 189, 248)),
+                Background = new SolidColorBrush(Color.FromArgb(40, 56, 189, 248)),
+                BorderBrush = new SolidColorBrush(Color.FromArgb(80, 56, 189, 248)),
                 BorderThickness = new Thickness(1),
                 CornerRadius = new CornerRadius(4),
                 Padding = new Thickness(6, 2, 6, 2),
@@ -122,9 +121,9 @@ namespace VPNTool
             };
             pillTag.Child = new TextBlock
             {
-                Text = isElevated ? "Administrador" : "Soporte Automático",
+                Text = "Soporte Automático",
                 FontSize = 10,
-                Foreground = isElevated ? new SolidColorBrush(Color.FromRgb(74, 222, 128)) : new SolidColorBrush(Color.FromRgb(56, 189, 248)),
+                Foreground = new SolidColorBrush(Color.FromRgb(56, 189, 248)),
                 FontWeight = FontWeights.SemiBold
             };
             titleLeft.Children.Add(pillTag);
@@ -177,13 +176,9 @@ namespace VPNTool
 
             TextBlock txtFooter = new TextBlock
             {
-                Text = isElevated
-                    ? "⚡ Ejecutando con permisos de Administrador • Portabilidad 100%"
-                    : "⚡ Acciones con cuenta de soporte local (.\\soporteneps) • Portabilidad 100%",
+                Text = "⚡ Acciones con cuenta de soporte local (.\\soporteneps) • Portabilidad 100%",
                 FontSize = 10.5,
-                Foreground = isElevated
-                    ? new SolidColorBrush(Color.FromRgb(34, 197, 94))
-                    : new SolidColorBrush(Color.FromRgb(148, 163, 184)),
+                Foreground = new SolidColorBrush(Color.FromRgb(148, 163, 184)),
                 VerticalAlignment = VerticalAlignment.Center
             };
             footerGrid.Children.Add(txtFooter);
