@@ -24,6 +24,7 @@ namespace VPNTool
         private TextBlock txtInstBtn;
 
         private Border toastNotification;
+        private Border toastIconHolder;
         private TextBlock txtToastTitle;
         private TextBlock txtToastMessage;
         private System.Windows.Threading.DispatcherTimer toastTimer;
@@ -176,9 +177,13 @@ namespace VPNTool
 
             TextBlock txtFooter = new TextBlock
             {
-                Text = "⚡ Acciones con cuenta de soporte local (.\\soporteneps) • Portabilidad 100%",
+                Text = isElevated
+                    ? "⚡ Ejecutando con permisos de Administrador • Portabilidad 100%"
+                    : "⚡ Acciones con cuenta de soporte local (.\\soporteneps) • Portabilidad 100%",
                 FontSize = 10.5,
-                Foreground = new SolidColorBrush(Color.FromRgb(148, 163, 184)),
+                Foreground = isElevated
+                    ? new SolidColorBrush(Color.FromRgb(34, 197, 94))
+                    : new SolidColorBrush(Color.FromRgb(148, 163, 184)),
                 VerticalAlignment = VerticalAlignment.Center
             };
             footerGrid.Children.Add(txtFooter);
@@ -608,7 +613,7 @@ namespace VPNTool
                 while (ex is System.Reflection.TargetInvocationException && ex.InnerException != null) ex = ex.InnerException;
                 btnUninstAction.IsEnabled = true;
                 RefreshAllStates();
-                ShowToast("Aviso", "Finalizó: " + ex.Message);
+                ShowToast("Error", "Error al desinstalar: " + ex.Message, true);
             }
         }
 
@@ -638,7 +643,7 @@ namespace VPNTool
                 }
                 else
                 {
-                    ShowToast("Aviso", "No se pudo verificar la instalación de GlobalProtect.");
+                    ShowToast("Aviso", "No se pudo verificar la instalación de GlobalProtect.", true);
                 }
             }
             catch (Exception ex)
@@ -646,7 +651,7 @@ namespace VPNTool
                 while (ex is System.Reflection.TargetInvocationException && ex.InnerException != null) ex = ex.InnerException;
                 btnInstAction.IsEnabled = true;
                 RefreshAllStates();
-                ShowToast("Error", "No se pudo completar la instalación: " + ex.Message);
+                ShowToast("Error", "No se pudo completar la instalación: " + ex.Message, true);
             }
         }
         #endregion
@@ -669,7 +674,9 @@ namespace VPNTool
             };
 
             StackPanel sp = new StackPanel { Orientation = Orientation.Horizontal };
-            sp.Children.Add(UITheme.CreateVectorIcon(UITheme.SvgCheck, new SolidColorBrush(Color.FromRgb(34, 197, 94)), 15));
+            toastIconHolder = new Border { VerticalAlignment = VerticalAlignment.Center };
+            toastIconHolder.Child = UITheme.CreateVectorIcon(UITheme.SvgCheck, new SolidColorBrush(Color.FromRgb(34, 197, 94)), 15);
+            sp.Children.Add(toastIconHolder);
 
             StackPanel textSp = new StackPanel { Margin = new Thickness(8, 0, 0, 0), VerticalAlignment = VerticalAlignment.Center };
             txtToastTitle = new TextBlock { FontSize = 12, FontWeight = FontWeights.Bold, Foreground = Brushes.White };
@@ -681,7 +688,7 @@ namespace VPNTool
             b.Child = sp;
 
             toastTimer = new System.Windows.Threading.DispatcherTimer();
-            toastTimer.Interval = TimeSpan.FromSeconds(4);
+            toastTimer.Interval = TimeSpan.FromSeconds(5);
             toastTimer.Tick += (s, e) =>
             {
                 toastTimer.Stop();
@@ -691,10 +698,24 @@ namespace VPNTool
             return b;
         }
 
-        private void ShowToast(string title, string msg)
+        private void ShowToast(string title, string msg, bool isError = false)
         {
             if (toastNotification == null) return;
             toastTimer.Stop();
+
+            if (isError)
+            {
+                toastIconHolder.Child = UITheme.CreateVectorIcon(UITheme.SvgAlert, new SolidColorBrush(Color.FromRgb(239, 68, 68)), 16);
+                toastNotification.BorderBrush = new SolidColorBrush(Color.FromArgb(160, 239, 68, 68));
+                txtToastTitle.Foreground = new SolidColorBrush(Color.FromRgb(248, 113, 113));
+            }
+            else
+            {
+                toastIconHolder.Child = UITheme.CreateVectorIcon(UITheme.SvgCheck, new SolidColorBrush(Color.FromRgb(34, 197, 94)), 15);
+                toastNotification.BorderBrush = new SolidColorBrush(Color.FromArgb(90, 56, 189, 248));
+                txtToastTitle.Foreground = Brushes.White;
+            }
+
             txtToastTitle.Text = title;
             txtToastMessage.Text = msg;
             toastNotification.Visibility = Visibility.Visible;
