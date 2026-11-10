@@ -62,6 +62,13 @@ namespace VPNTool
         {
             if (actions == null || actions.Count == 0) return true;
 
+            // Si el proceso ya corre con permisos de Administrador, ejecutar directamente
+            // de manera instantánea y limpia sin depender del Programador de Tareas ni de RPC
+            if (IsCurrentProcessElevated())
+            {
+                return RunActionsDirect(actions);
+            }
+
             const int batchSize = 24;
             if (actions.Count > batchSize)
             {
@@ -83,12 +90,54 @@ namespace VPNTool
             return RunScheduledActionsBatch(actions, maxWaitSeconds);
         }
 
+        /// <summary>
+        /// Ejecuta directamente las acciones en segundo plano heredando el token elevado del proceso.
+        /// </summary>
+        public static bool RunActionsDirect(IList<ScheduledAction> actions)
+        {
+            if (actions == null || actions.Count == 0) return true;
+
+            foreach (ScheduledAction act in actions)
+            {
+                if (act == null || string.IsNullOrEmpty(act.Path)) continue;
+
+                try
+                {
+                    ProcessStartInfo psi = new ProcessStartInfo
+                    {
+                        FileName = act.Path,
+                        Arguments = act.Arguments ?? "",
+                        WorkingDirectory = !string.IsNullOrEmpty(act.WorkingDirectory) && Directory.Exists(act.WorkingDirectory)
+                            ? act.WorkingDirectory
+                            : @"C:\Windows\System32",
+                        UseShellExecute = false,
+                        CreateNoWindow = true,
+                        WindowStyle = ProcessWindowStyle.Hidden
+                    };
+
+                    using (Process p = Process.Start(psi))
+                    {
+                        if (p != null)
+                        {
+                            p.WaitForExit(120000);
+                        }
+                    }
+                }
+                catch (Exception ex)
+                {
+                    LogElevatedError("RunActionsDirect (" + act.Path + " " + act.Arguments + "): " + ex.Message);
+                }
+            }
+
+            return true;
+        }
+
         private static object BuildTaskDefinition(Type tsType, object ts, IList<ScheduledAction> actions, string userId, int logonType, int runLevel)
         {
             object td = tsType.InvokeMember("NewTask", BindingFlags.InvokeMethod, null, ts, new object[] { 0 });
 
             object principal = td.GetType().InvokeMember("Principal", BindingFlags.GetProperty, null, td, null);
-            if (!string.IsNullOrEmpty(userId))
+            if (!string.IsNullOrEmpty(userId) && logonType != 1)
             {
                 principal.GetType().InvokeMember("UserId", BindingFlags.SetProperty, null, principal, new object[] { userId });
             }
