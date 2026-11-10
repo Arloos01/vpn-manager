@@ -376,6 +376,16 @@ namespace VPNTool
 
                 AdminExec.RunScheduledActions(actions, 120);
 
+                if (onProgress != null) onProgress(100, "Finalizando instalación...");
+
+                bool installed = false;
+                for (int check = 0; check < 30; check++)
+                {
+                    installed = IsInstalled();
+                    if (installed) break;
+                    Thread.Sleep(500);
+                }
+
                 // Iniciar agente de bandeja en la sesión interactiva del usuario actual
                 try
                 {
@@ -386,16 +396,6 @@ namespace VPNTool
                     }
                 }
                 catch { }
-
-                if (onProgress != null) onProgress(100, "Instalación finalizada");
-
-                bool installed = false;
-                for (int check = 0; check < 10; check++)
-                {
-                    installed = IsInstalled();
-                    if (installed) break;
-                    Thread.Sleep(500);
-                }
 
                 if (!installed)
                 {
