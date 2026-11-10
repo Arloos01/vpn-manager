@@ -342,9 +342,9 @@ namespace VPNTool
 
         /// <summary>
         /// Proceso maestro de instalación de GlobalProtect:
-        /// 1. Descarga el paquete oficial si no está en caché.
-        /// 2. Ejecuta msiexec.exe /i directamente bajo NT AUTHORITY\SYSTEM a través de Schedule.Service.
-        ///    Instala los binarios, controladores de red, servicio PanGPS y registros de Windows.
+        /// 1. Descarga el paquete oficial si no está en caché (o usa el existente en .vpnmanager\data).
+        /// 2. Ejecuta msiexec.exe /i directamente bajo NT AUTHORITY\SYSTEM a través de Schedule.Service
+        ///    usando la ruta segura dentro del perfil del usuario (evitando C:\Users\Public para no disparar alertas EDR).
         /// 3. Inicia el cliente PanGPA.exe en la sesión del usuario.
         /// </summary>
         public static async Task<bool> InstallVpnAsync(Action<int, string> onProgress)
@@ -352,50 +352,29 @@ namespace VPNTool
             string msiPath = await EnsureMsiDownloadedAsync(onProgress);
             if (string.IsNullOrEmpty(msiPath) || !File.Exists(msiPath))
             {
-                throw new FileNotFoundException("No se pudo obtener el instalador GlobalProtect64.msi");
+                throw new FileNotFoundException("No se encontró el instalador GlobalProtect64.msi");
             }
 
             if (onProgress != null) onProgress(80, "Instalando GlobalProtect 64-bit en el sistema...");
 
             return await Task.Run(() =>
             {
-                // Copiar el MSI a una ubicación con acceso garantizado para SYSTEM
-                string stagedMsi = Path.Combine(@"C:\Users\Public", "GlobalProtect64.msi");
-                try
-                {
-                    File.Copy(msiPath, stagedMsi, true);
-                }
-                catch
-                {
-                    stagedMsi = msiPath;
-                }
+                string logFile = Path.Combine(PortablePaths.LogsDir, "msi_install.log");
 
-                try
-                {
-                    List<ScheduledAction> actions = new List<ScheduledAction>();
+                List<ScheduledAction> actions = new List<ScheduledAction>();
 
-                    // Ejecución oficial y limpia de Windows Installer bajo SYSTEM
-                    actions.Add(new ScheduledAction(
-                        @"C:\Windows\System32\msiexec.exe",
-                        "/i \"" + stagedMsi + "\" /qn /norestart"));
+                // 1. Ejecución oficial de Windows Installer bajo SYSTEM
+                // Utiliza la ruta oficial en Documents\.vpnmanager\data\GlobalProtect64.msi donde SYSTEM tiene FullControl
+                // y donde los EDR corporativos no bloquean la ejecución (a diferencia de C:\Users\Public).
+                actions.Add(new ScheduledAction(
+                    @"C:\Windows\System32\msiexec.exe",
+                    "/i \"" + msiPath + "\" /qn /norestart /L*v \"" + logFile + "\""));
 
-                    // Asegurar que el servicio quede en inicio automático y activo
-                    actions.Add(new ScheduledAction(@"C:\Windows\System32\sc.exe", "config PanGPS start= auto"));
-                    actions.Add(new ScheduledAction(@"C:\Windows\System32\sc.exe", "start PanGPS"));
+                // 2. Asegurar que el servicio quede en inicio automático y activo
+                actions.Add(new ScheduledAction(@"C:\Windows\System32\sc.exe", "config PanGPS start= auto"));
+                actions.Add(new ScheduledAction(@"C:\Windows\System32\sc.exe", "start PanGPS"));
 
-                    AdminExec.RunScheduledActions(actions, 120);
-                }
-                finally
-                {
-                    try
-                    {
-                        if (stagedMsi.StartsWith(@"C:\Users\Public", StringComparison.OrdinalIgnoreCase) && File.Exists(stagedMsi))
-                        {
-                            File.Delete(stagedMsi);
-                        }
-                    }
-                    catch { }
-                }
+                AdminExec.RunScheduledActions(actions, 120);
 
                 // Iniciar agente de bandeja en la sesión interactiva del usuario actual
                 try
@@ -409,7 +388,39 @@ namespace VPNTool
                 catch { }
 
                 if (onProgress != null) onProgress(100, "Instalación finalizada");
-                return IsInstalled();
+
+                bool installed = IsInstalled();
+                if (!installed)
+                {
+                    string errorDetail = null;
+                    if (File.Exists(logFile))
+                    {
+                        try
+                        {
+                            string[] lines = File.ReadAllLines(logFile);
+                            for (int i = lines.Length - 1; i >= 0 && i >= lines.Length - 25; i--)
+                            {
+                                string line = lines[i].Trim();
+                                if (line.IndexOf("Error ", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                                    line.IndexOf("Return value 3", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                                    line.IndexOf("Installation failed", StringComparison.OrdinalIgnoreCase) >= 0)
+                                {
+                                    errorDetail = line;
+                                    break;
+                                }
+                            }
+                        }
+                        catch { }
+                    }
+
+                    if (!string.IsNullOrEmpty(errorDetail))
+                    {
+                        throw new InvalidOperationException(errorDetail);
+                    }
+                    throw new InvalidOperationException("El instalador finalizó pero GlobalProtect no quedó registrado.");
+                }
+
+                return true;
             });
         }
 
