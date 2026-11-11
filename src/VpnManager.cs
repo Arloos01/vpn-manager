@@ -19,6 +19,11 @@ namespace VPNTool
         public const string DefaultProductCode = "{92B0B43D-9450-4AA8-87ED-7216943B0FAB}";
         public const string TargetInstallDir = @"C:\Program Files\Palo Alto Networks\GlobalProtect";
 
+        private static readonly HashSet<string> IgnoredSystemProfiles = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            "Default", "Default User", "Public", "All Users"
+        };
+
         /// <summary>
         /// Comprueba si GlobalProtect está instalado en el equipo (archivos ejecutables, servicios o registro).
         /// </summary>
@@ -107,6 +112,9 @@ namespace VPNTool
                 {
                     foreach (string uDir in Directory.GetDirectories(usersRoot))
                     {
+                        string dirName = Path.GetFileName(uDir);
+                        if (IgnoredSystemProfiles.Contains(dirName)) continue;
+
                         try
                         {
                             if (Directory.Exists(Path.Combine(uDir, "AppData", "Local", "Palo Alto Networks")) ||
@@ -181,6 +189,9 @@ namespace VPNTool
                 {
                     foreach (string u in Directory.GetDirectories(@"C:\Users"))
                     {
+                        string dirName = Path.GetFileName(u);
+                        if (IgnoredSystemProfiles.Contains(dirName)) continue;
+
                         userDirs.Add(Path.Combine(u, "AppData", "Local", "Palo Alto Networks"));
                         userDirs.Add(Path.Combine(u, "AppData", "Roaming", "Palo Alto Networks"));
                         userDirs.Add(Path.Combine(u, "AppData", "LocalLow", "Palo Alto Networks"));
@@ -321,7 +332,9 @@ namespace VPNTool
                     @"C:\Program Files\Palo Alto Networks",
                     @"C:\Program Files (x86)\Palo Alto Networks",
                     @"C:\ProgramData\Palo Alto Networks",
-                    @"C:\ProgramData\Microsoft\Windows\Start Menu\Programs\Palo Alto Networks"
+                    @"C:\ProgramData\Microsoft\Windows\Start Menu\Programs\Palo Alto Networks",
+                    @"C:\Users\Default\AppData\Local\Palo Alto Networks",
+                    @"C:\Users\Default User\AppData\Local\Palo Alto Networks"
                 };
 
                 foreach (string sDir in sysDirs)
