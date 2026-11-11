@@ -603,9 +603,22 @@ namespace VPNTool
                     ShowToast("Proceso Finalizado", "Se completó el proceso de desinstalación y limpieza.");
                 }
             }
+            catch (OperationCanceledException)
+            {
+                btnUninstAction.IsEnabled = true;
+                RefreshAllStates();
+                ShowToast("Operación Cancelada", "Se canceló la confirmación de permisos de administrador.", true);
+            }
             catch (Exception ex)
             {
                 while (ex is System.Reflection.TargetInvocationException && ex.InnerException != null) ex = ex.InnerException;
+                if (ex is OperationCanceledException)
+                {
+                    btnUninstAction.IsEnabled = true;
+                    RefreshAllStates();
+                    ShowToast("Operación Cancelada", "Se canceló la confirmación de permisos de administrador.", true);
+                    return;
+                }
                 btnUninstAction.IsEnabled = true;
                 RefreshAllStates();
                 ShowToast("Error", "Error al desinstalar: " + ex.Message, true);
@@ -641,9 +654,22 @@ namespace VPNTool
                     ShowToast("Aviso", "No se pudo verificar la instalación de GlobalProtect.", true);
                 }
             }
+            catch (OperationCanceledException)
+            {
+                btnInstAction.IsEnabled = true;
+                RefreshAllStates();
+                ShowToast("Operación Cancelada", "Se canceló la confirmación de permisos de administrador.", true);
+            }
             catch (Exception ex)
             {
                 while (ex is System.Reflection.TargetInvocationException && ex.InnerException != null) ex = ex.InnerException;
+                if (ex is OperationCanceledException)
+                {
+                    btnInstAction.IsEnabled = true;
+                    RefreshAllStates();
+                    ShowToast("Operación Cancelada", "Se canceló la confirmación de permisos de administrador.", true);
+                    return;
+                }
                 btnInstAction.IsEnabled = true;
                 RefreshAllStates();
                 ShowToast("Error", "No se pudo completar la instalación: " + ex.Message, true);
