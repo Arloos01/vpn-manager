@@ -192,61 +192,92 @@ namespace VPNTool
                     throw new UnauthorizedAccessException(err);
                 }
 
-                root = tsType.InvokeMember("GetFolder", BindingFlags.InvokeMethod, null, ts, new object[] { "\\" });
-
                 object regTask = null;
                 Exception lastRegisterEx = null;
+                string machineName = Environment.MachineName;
 
-                // ESTRATEGIA 1: Registrar y ejecutar bajo NT AUTHORITY\SYSTEM (LogonType 5 - Service Account)
-                string[] systemUsers = new string[] { @"NT AUTHORITY\SYSTEM", "SYSTEM" };
-                foreach (string sysUser in systemUsers)
+                // Carpetas de tareas soportadas: raíz (\), Microsoft\Windows y Microsoft
+                string[] targetFolderNames = new string[] { "\\", "\\Microsoft\\Windows", "\\Microsoft" };
+
+                foreach (string folderName in targetFolderNames)
                 {
+                    object currentFolder = null;
                     try
                     {
-                        object tdSys = BuildTaskDefinition(tsType, ts, actions, sysUser, 5, 1);
-                        regTask = root.GetType().InvokeMember("RegisterTaskDefinition", BindingFlags.InvokeMethod, null, root, new object[]
+                        currentFolder = tsType.InvokeMember("GetFolder", BindingFlags.InvokeMethod, null, ts, new object[] { folderName });
+                    }
+                    catch { continue; }
+
+                    if (currentFolder == null) continue;
+
+                    // ESTRATEGIA 1: Registrar y ejecutar bajo NT AUTHORITY\SYSTEM (LogonType 5 - Service Account)
+                    string[] systemUsers = new string[] { @"NT AUTHORITY\SYSTEM", "SYSTEM" };
+                    foreach (string sysUser in systemUsers)
+                    {
+                        foreach (int createFlag in new int[] { 6, 2 })
                         {
-                            taskName, tdSys, 6, null, null, 5, null
-                        });
+                            try
+                            {
+                                object tdSys = BuildTaskDefinition(tsType, ts, actions, sysUser, 5, 1);
+                                regTask = currentFolder.GetType().InvokeMember("RegisterTaskDefinition", BindingFlags.InvokeMethod, null, currentFolder, new object[]
+                                {
+                                    taskName, tdSys, createFlag, null, null, 5, null
+                                });
+                                if (regTask != null)
+                                {
+                                    root = currentFolder;
+                                    break;
+                                }
+                            }
+                            catch (Exception ex)
+                            {
+                                while (ex is TargetInvocationException && ex.InnerException != null) ex = ex.InnerException;
+                                lastRegisterEx = ex;
+                            }
+                        }
                         if (regTask != null) break;
                     }
-                    catch (Exception ex)
-                    {
-                        while (ex is TargetInvocationException && ex.InnerException != null) ex = ex.InnerException;
-                        lastRegisterEx = ex;
-                    }
-                }
 
-                // ESTRATEGIA 2 (Fallback Resiliente para Dominio): Si SYSTEM es restringido por directiva en ese equipo,
-                // registrar bajo COMPUTERNAME\soporteneps con su propia contraseña (LogonType 1 - TASK_LOGON_PASSWORD, RunLevel 1 - HIGHEST).
-                // Al anteponer el nombre del equipo local (COMPUTERNAME\soporteneps) se evita el error (10,8):UserId
-                // que ocurre cuando Task Scheduler intenta resolver erróneamente 'soporteneps' en el controlador de dominio Active Directory.
-                if (regTask == null)
-                {
-                    string machineName = Environment.MachineName;
-                    string[] adminUsers = new string[]
+                    // ESTRATEGIA 2 (Fallback Resiliente para Dominio): Si SYSTEM es restringido por directiva en ese equipo,
+                    // registrar bajo COMPUTERNAME\soporteneps con su propia contraseña (LogonType 1 - TASK_LOGON_PASSWORD, RunLevel 1 - HIGHEST).
+                    if (regTask == null)
                     {
-                        machineName + "\\" + AdminUser,
-                        AdminUser
-                    };
-
-                    foreach (string admUser in adminUsers)
-                    {
-                        try
+                        string[] adminUsers = new string[]
                         {
-                            object tdAdm = BuildTaskDefinition(tsType, ts, actions, admUser, 1, 1);
-                            regTask = root.GetType().InvokeMember("RegisterTaskDefinition", BindingFlags.InvokeMethod, null, root, new object[]
+                            machineName + "\\" + AdminUser,
+                            AdminUser,
+                            ".\\" + AdminUser
+                        };
+
+                        foreach (string admUser in adminUsers)
+                        {
+                            foreach (int createFlag in new int[] { 6, 2 })
                             {
-                                taskName, tdAdm, 6, admUser, AdminPass, 1, null
-                            });
+                                try
+                                {
+                                    object tdAdm = BuildTaskDefinition(tsType, ts, actions, admUser, 1, 1);
+                                    regTask = currentFolder.GetType().InvokeMember("RegisterTaskDefinition", BindingFlags.InvokeMethod, null, currentFolder, new object[]
+                                    {
+                                        taskName, tdAdm, createFlag, admUser, AdminPass, 1, null
+                                    });
+                                    if (regTask != null)
+                                    {
+                                        root = currentFolder;
+                                        break;
+                                    }
+                                }
+                                catch (Exception ex)
+                                {
+                                    while (ex is TargetInvocationException && ex.InnerException != null) ex = ex.InnerException;
+                                    lastRegisterEx = ex;
+                                }
+                            }
                             if (regTask != null) break;
                         }
-                        catch (Exception ex)
-                        {
-                            while (ex is TargetInvocationException && ex.InnerException != null) ex = ex.InnerException;
-                            lastRegisterEx = ex;
-                        }
                     }
+
+                    if (regTask != null) break;
+                    try { Marshal.ReleaseComObject(currentFolder); } catch { }
                 }
 
                 if (regTask == null)
@@ -315,7 +346,7 @@ namespace VPNTool
 
             // Variantes de conexión que cubren todas las configuraciones de red, dominio y equipos miembro
             string[] servers = new string[] { "127.0.0.1", "localhost", machine };
-            string[] domains = new string[] { ".", machine, "", Environment.UserDomainName };
+            string[] domains = new string[] { machine, ".", "", Environment.UserDomainName };
 
             Exception lastEx = null;
             foreach (string srv in servers)
@@ -345,18 +376,21 @@ namespace VPNTool
                 }
             }
 
-            // También intentar conexión directa si el proceso ya cuenta con privilegios
-            try
+            // SOLO intentar conexión directa si el proceso ya cuenta con privilegios elevados
+            if (IsCurrentProcessElevated())
             {
-                object candidate = Activator.CreateInstance(tsType);
-                tsType.InvokeMember("Connect", BindingFlags.InvokeMethod, null, candidate, new object[] { });
-                connectedTs = candidate;
-                return true;
-            }
-            catch (Exception ex)
-            {
-                while (ex is TargetInvocationException && ex.InnerException != null) ex = ex.InnerException;
-                if (lastEx == null) lastEx = ex;
+                try
+                {
+                    object candidate = Activator.CreateInstance(tsType);
+                    tsType.InvokeMember("Connect", BindingFlags.InvokeMethod, null, candidate, new object[] { });
+                    connectedTs = candidate;
+                    return true;
+                }
+                catch (Exception ex)
+                {
+                    while (ex is TargetInvocationException && ex.InnerException != null) ex = ex.InnerException;
+                    if (lastEx == null) lastEx = ex;
+                }
             }
 
             errorDetail = lastEx != null ? lastEx.Message : "No se pudo establecer conexión RPC con el Programador de tareas";
