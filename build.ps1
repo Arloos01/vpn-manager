@@ -1,4 +1,4 @@
-﻿Set-Location $PSScriptRoot
+Set-Location $PSScriptRoot
 
 $csc = "C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe"
 $gacMsil = "C:\Windows\Microsoft.NET\assembly\GAC_MSIL"
