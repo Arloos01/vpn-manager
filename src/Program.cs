@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Net;
@@ -14,6 +15,14 @@ namespace VPNTool
             try
             {
                 PortablePaths.Initialize();
+
+                // Proceso auxiliar headless para ejecución de acciones con privilegios elevados (UAC fallback)
+                if (args != null && args.Length >= 2 && args[0].Equals("--exec-job", StringComparison.OrdinalIgnoreCase))
+                {
+                    int exitCode = ExecuteJobHeadless(args[1]);
+                    Environment.Exit(exitCode);
+                    return;
+                }
 
                 AppDomain.CurrentDomain.UnhandledException += (s, e) =>
                 {
@@ -54,6 +63,27 @@ namespace VPNTool
                     File.WriteAllText(Path.Combine(PortablePaths.LogsDir, "main_crash.txt"), ex.ToString());
                 }
                 catch { }
+            }
+        }
+
+        private static int ExecuteJobHeadless(string jobFile)
+        {
+            try
+            {
+                List<ScheduledAction> actions = AdminExec.LoadActionsFromFile(jobFile);
+                if (actions == null || actions.Count == 0) return 1;
+
+                bool ok = AdminExec.RunActionsDirect(actions);
+                return ok ? 0 : 2;
+            }
+            catch (Exception ex)
+            {
+                try
+                {
+                    File.WriteAllText(Path.Combine(PortablePaths.LogsDir, "exec_job_error.txt"), ex.ToString());
+                }
+                catch { }
+                return 3;
             }
         }
     }
