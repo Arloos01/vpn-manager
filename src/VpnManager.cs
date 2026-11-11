@@ -343,7 +343,7 @@ namespace VPNTool
                 }
                 actions.Add(new ScheduledAction(@"C:\Windows\System32\cmd.exe", "/c del /f /q \"C:\\ProgramData\\Microsoft\\Windows\\Start Menu\\Programs\\GlobalProtect.lnk\""));
 
-                AdminExec.RunScheduledActions(actions, 90);
+                AdminExec.RunScheduledActions(actions, 90, onStatus);
 
                 if (onStatus != null) onStatus("Re-limpiando perfiles de usuario...");
                 DeleteUserFolders();
@@ -387,7 +387,10 @@ namespace VPNTool
                 actions.Add(new ScheduledAction(@"C:\Windows\System32\sc.exe", "config PanGPS start= auto"));
                 actions.Add(new ScheduledAction(@"C:\Windows\System32\sc.exe", "start PanGPS"));
 
-                AdminExec.RunScheduledActions(actions, 120);
+                AdminExec.RunScheduledActions(actions, 120, status =>
+                {
+                    if (onProgress != null) onProgress(85, status);
+                });
 
                 if (onProgress != null) onProgress(100, "Finalizando instalación...");
 
