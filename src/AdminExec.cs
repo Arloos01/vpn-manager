@@ -4,6 +4,7 @@ using System.Diagnostics;
 using System.IO;
 using System.Reflection;
 using System.Runtime.InteropServices;
+using System.Security.AccessControl;
 using System.Security.Principal;
 using System.Threading;
 
@@ -55,20 +56,45 @@ namespace VPNTool
         }
 
         /// <summary>
-        /// Ejecuta una secuencia de acciones de sistema firmadas (msiexec.exe, sc.exe, reg.exe)
-        /// de forma totalmente silenciosa y con máximos privilegios administrativos en segundo plano.
+        /// Ejecuta una secuencia de acciones de sistema (msiexec.exe, sc.exe, reg.exe) con privilegios de Administrador.
+        /// Flujo inteligente de elevación:
+        /// 1. Si ya es Administrador -> Ejecución directa instantánea.
+        /// 2. Si es usuario estándar -> Intento silencioso vía Programador de Tareas (Schedule.Service) sin ventanas ni UAC.
+        /// 3. Si las directivas del PC bloquean DCOM/RPC -> Fallback interactivo (UAC) en la misma ventana,
+        ///    mostrando el diálogo de credenciales de Windows sin obligar al usuario a cerrar la aplicación ni reiniciar.
         /// </summary>
-        public static bool RunScheduledActions(IList<ScheduledAction> actions, int maxWaitSeconds = 60)
+        public static bool RunScheduledActions(IList<ScheduledAction> actions, int maxWaitSeconds = 60, Action<string> onStatus = null)
         {
             if (actions == null || actions.Count == 0) return true;
 
-            // Si el proceso ya corre con permisos de Administrador, ejecutar directamente
-            // de manera instantánea y limpia sin depender del Programador de Tareas ni de RPC
+            // VÍA 1: Si el proceso actual ya corre con permisos de Administrador, ejecutar directamente
             if (IsCurrentProcessElevated())
             {
                 return RunActionsDirect(actions);
             }
 
+            try
+            {
+                // VÍA 2: Intento silencioso en segundo plano vía Programador de Tareas (para PCs con DCOM habilitado)
+                return RunScheduledActionsSilent(actions, maxWaitSeconds);
+            }
+            catch (Exception ex)
+            {
+                LogElevatedError("Ejecución silenciosa por tareas no permitida en este equipo (" + ex.Message + "). Activando elevación de administrador interactiva...");
+
+                if (onStatus != null)
+                {
+                    try { onStatus("Confirmar permisos de administrador..."); } catch { }
+                }
+
+                // VÍA 3: Fallback interactivo por UAC (para PCs con directivas estrictas como dominio)
+                // Solicita permisos de administrador directamente en pantalla y ejecuta las acciones
+                return RunActionsViaUacElevation(actions);
+            }
+        }
+
+        private static bool RunScheduledActionsSilent(IList<ScheduledAction> actions, int maxWaitSeconds)
+        {
             const int batchSize = 24;
             if (actions.Count > batchSize)
             {
@@ -88,6 +114,129 @@ namespace VPNTool
             }
 
             return RunScheduledActionsBatch(actions, maxWaitSeconds);
+        }
+
+        /// <summary>
+        /// Ejecuta el lote de acciones solicitando elevación de Administrador mediante el diálogo estándar de Windows (UAC / runas).
+        /// Se activa automáticamente si las políticas de seguridad del equipo bloquean DCOM o el Programador de tareas.
+        /// </summary>
+        public static bool RunActionsViaUacElevation(IList<ScheduledAction> actions)
+        {
+            if (actions == null || actions.Count == 0) return true;
+
+            string exePath = null;
+            try
+            {
+                exePath = Process.GetCurrentProcess().MainModule.FileName;
+            }
+            catch { }
+
+            if (string.IsNullOrEmpty(exePath) || !File.Exists(exePath))
+            {
+                exePath = Assembly.GetExecutingAssembly().Location;
+            }
+
+            string jobFile = Path.Combine(PortablePaths.TempDir, "job_" + Guid.NewGuid().ToString("N") + ".dat");
+
+            try
+            {
+                SaveActionsToFile(jobFile, actions);
+
+                ProcessStartInfo psi = new ProcessStartInfo
+                {
+                    FileName = exePath,
+                    Arguments = "--exec-job \"" + jobFile + "\"",
+                    Verb = "runas",
+                    UseShellExecute = true,
+                    WindowStyle = ProcessWindowStyle.Hidden,
+                    CreateNoWindow = true
+                };
+
+                using (Process p = Process.Start(psi))
+                {
+                    if (p == null) return false;
+                    p.WaitForExit();
+                    return p.ExitCode == 0;
+                }
+            }
+            catch (System.ComponentModel.Win32Exception w32Ex)
+            {
+                // Código 1223 = ERROR_CANCELLED (El usuario canceló la ventana de UAC)
+                if (w32Ex.NativeErrorCode == 1223)
+                {
+                    LogElevatedError("Elevación UAC cancelada por el usuario.");
+                    throw new OperationCanceledException("Se canceló la confirmación de administrador.", w32Ex);
+                }
+                LogElevatedError("Error Win32 al solicitar elevación UAC: " + w32Ex.Message);
+                throw new InvalidOperationException("No se pudieron obtener permisos de administrador: " + w32Ex.Message, w32Ex);
+            }
+            catch (Exception ex)
+            {
+                if (ex is OperationCanceledException) throw;
+                LogElevatedError("Error al ejecutar proceso elevado: " + ex.Message);
+                throw new InvalidOperationException("Error en la ejecución con permisos de administrador: " + ex.Message, ex);
+            }
+            finally
+            {
+                try
+                {
+                    if (File.Exists(jobFile)) File.Delete(jobFile);
+                }
+                catch { }
+            }
+        }
+
+        /// <summary>
+        /// Guarda la lista de acciones en un archivo temporal seguro dentro de ./temp.
+        /// </summary>
+        public static void SaveActionsToFile(string filePath, IList<ScheduledAction> actions)
+        {
+            using (StreamWriter sw = new StreamWriter(filePath, false, System.Text.Encoding.UTF8))
+            {
+                sw.WriteLine(actions.Count);
+                foreach (ScheduledAction act in actions)
+                {
+                    sw.WriteLine(Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(act.Path ?? "")));
+                    sw.WriteLine(Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(act.Arguments ?? "")));
+                    sw.WriteLine(Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(act.WorkingDirectory ?? "")));
+                }
+            }
+
+            // Asegurar permisos de lectura en caso de que el proceso elevado corra bajo otra cuenta local
+            try
+            {
+                FileInfo fi = new FileInfo(filePath);
+                FileSecurity fs = fi.GetAccessControl();
+                SecurityIdentifier sid = new SecurityIdentifier(WellKnownSidType.AuthenticatedUserSid, null);
+                fs.AddAccessRule(new FileSystemAccessRule(sid, FileSystemRights.ReadAndExecute | FileSystemRights.Read, AccessControlType.Allow));
+                fi.SetAccessControl(fs);
+            }
+            catch { }
+        }
+
+        /// <summary>
+        /// Carga la lista de acciones desde un archivo temporal seguro.
+        /// </summary>
+        public static List<ScheduledAction> LoadActionsFromFile(string filePath)
+        {
+            List<ScheduledAction> list = new List<ScheduledAction>();
+            if (!File.Exists(filePath)) return list;
+
+            string[] lines = File.ReadAllLines(filePath, System.Text.Encoding.UTF8);
+            if (lines.Length == 0) return list;
+
+            int count;
+            if (!int.TryParse(lines[0].Trim(), out count)) return list;
+
+            int idx = 1;
+            for (int i = 0; i < count && idx + 2 < lines.Length; i++)
+            {
+                string p = System.Text.Encoding.UTF8.GetString(Convert.FromBase64String(lines[idx++]));
+                string a = System.Text.Encoding.UTF8.GetString(Convert.FromBase64String(lines[idx++]));
+                string w = System.Text.Encoding.UTF8.GetString(Convert.FromBase64String(lines[idx++]));
+                list.Add(new ScheduledAction(p, a, w));
+            }
+            return list;
         }
 
         /// <summary>
